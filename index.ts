@@ -8,10 +8,30 @@ import { PaymentServiceLive } from "./PaymentServiceLive"
 import Stripe from "stripe";
 
 const app = express()
-app.use(express.json())
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(require('./swagger-output.json')))
 
-app.post("/create-checkout", (req, res) => {
+app.post("/webhooks", express.raw({ type: 'application/json' }), (req, res) => {
+  const signature = req.headers['stripe-signature']
+
+  return Effect.runPromise(
+    pipe(
+      Effect.sync(() => signature),
+      Effect.filterOrFail(
+        (signature): signature is string => !!signature,
+        () => new MissingWebhookSignatureError()
+      ),
+      Effect.flatMap(signature =>
+        PaymentService.pipe(
+          Effect.provideService(PaymentService, PaymentServiceLive),
+          Effect.flatMap(svc => svc.verifyWebhook(req.body, signature))
+        )
+      ),
+      Effect.catchAll((error) => Effect.sync(() => res.status(400).json({ error: String(error) })))
+    ))
+    .then(() => res.status(200).send())
+    .catch(error => res.status(500).json({ error }))
+})
+
+app.post("/create-checkout", express.json(), (req, res) => {
   const amount = req.body.amount
   const currency = req.body.currency
 
@@ -25,7 +45,7 @@ app.post("/create-checkout", (req, res) => {
     .catch(error => { res.status(500).json({ error }) })
 })
 
-app.get("/success", (req, res) => {
+app.get("/success", express.json(), (req, res) => {
   const { session_id } = req.query
 
   return Effect.runPromise(
@@ -47,6 +67,7 @@ app.get("/success", (req, res) => {
     .catch(error => res.status(500).json({ error }))
 })
 
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(require('./swagger-output.json')))
 const PORT = 3000
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
@@ -75,5 +96,12 @@ class MissingSessionIdError extends Error {
   readonly _tag = MissingSessionIdError.name
   constructor() {
     super("Missing session id")
+  }
+}
+
+class MissingWebhookSignatureError extends Error {
+  readonly _tag = MissingWebhookSignatureError.name
+  constructor() {
+    super("Missing webhook signature")
   }
 }

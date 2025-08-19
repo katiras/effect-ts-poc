@@ -4,6 +4,7 @@ import { pipe } from "@effect/data/Function";
 import { PaymentService } from "./PaymentService";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET!, { apiVersion: "2025-07-30.basil" });
+const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET!
 
 export const PaymentServiceLive: PaymentService = {
   createPaymentIntent: (amount, currency) =>
@@ -61,4 +62,10 @@ export const PaymentServiceLive: PaymentService = {
       Effect.tryPromise(() => stripe.checkout.sessions.retrieve(sessionId)),
       Effect.mapError((error) => error as Error)
     ),
+
+  verifyWebhook: (body, signature) =>
+    pipe(
+      Effect.try(() => stripe.webhooks.constructEvent(body, signature!, stripeWebhookSecret)),
+      Effect.mapError(error => new Error(String(error)))
+    )
 };
